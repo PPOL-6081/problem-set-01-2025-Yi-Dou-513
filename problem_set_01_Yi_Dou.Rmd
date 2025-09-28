@@ -1,0 +1,262 @@
+---
+title: "Problem Set 1"
+author: "Yi Dou"
+date: "2025-09-28"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Question 1
+```{r}
+set.seed(1234)
+pacman::p_load(tidyverse)
+
+# read the dataset
+tweets <- read.csv('C:\\Users\\ASUS\\Desktop\\problem-set-01-2025-Yi-Dou-513\\tweets_congress.csv')
+
+# take a sample
+tweets_sample <- tweets %>%
+  filter(congress == 'senate') %>%
+  sample_n(20)
+tweets_sample %>%
+  select(Name, text) %>%
+  view()
+```
+
+I took a sample of 20 observations of senate members' tweets. I found these tweets can be divided into two categories. The first one can be called 'daily'. This kind of tweets don't show the authors' political opinions specifically, but focus on the authors' schedule or festivals of the country. The other one can be called 'ideological'. This kind of tweets either express the authors' political tendency directly or through commenting some specific events. I also noticed some tweets contains an '@' to show it's a retweet or a '#' to include a topic. Another important finding is the texts only contains the first few sentences of the tweets, and end with a link.
+
+## Question 2
+```{r}
+pacman::p_load(quanteda)
+set.seed(1234)
+
+# remove the link
+tweets$text <- str_replace(tweets$text, "https.*$", "")
+
+# convert to corpus
+tweets_corpus <- corpus(tweets, text_field = "text")
+
+# pre-process and convert to dfm
+tweets_dfm <- tweets_corpus %>%
+  tokens(remove_punct = FALSE, 
+         remove_numbers = TRUE, 
+         verbose = FALSE) %>%
+  tokens_replace(pattern = "[[:punct:]&&[^#@]]+", 
+                 replacement = "", 
+                 valuetype = "regex") %>%
+  tokens_tolower() %>%
+  tokens_remove(stopwords("en")) %>%
+  tokens_wordstem() %>%
+  dfm() 
+
+print(tweets_dfm)
+
+```
+
+I removed the link at the end of each tweet, because it doesn't contain information we need. I also removed punctuation, numbers and end words as the common steps of pre-processing. I think a step we should not use is to remove all the punctuation marks, because this will remove "#" and "@" which have meaning in tweet context. I had been worried that the "remove_punct = TRUE" argument would remove "#" and "@" as well, so I tried to maintained them manually.
+
+## Question 3
+```{r}
+pacman::p_load("preText")
+set.seed(1234)
+
+# convert the sample to corpus
+tweets_sample$text <- str_replace(tweets_sample$text, "https.*$", "")
+tweets_sample_corpus <- corpus(tweets_sample, text_field = "text")
+
+# do the preText
+preprocessed_tweets <- factorial_preprocessing(
+    tweets_sample_corpus,
+    verbose = FALSE)
+preText_results <- preText(
+    preprocessed_tweets,
+    dataset_name = "Tweets",
+    distance_method = "cosine",
+    num_comparisons = 20,
+    verbose = FALSE)
+
+# visualization
+regression_coefficient_plot(preText_results,
+                            remove_intercept = TRUE)
+```
+
+According to preText, using ngrams, removing stopwords and removing punctuations will produce more "normal" results, and none of these steps will produce more unusual results. Therefore, the I would keep all these steps.
+
+## Queations 4
+```{r}
+set.seed(1234)
+
+# subgroup by party
+dfm_grouped <- dfm_group(tweets_dfm, Party)
+dfm_grouped <- dfm_subset(dfm_grouped, docid_ %in% c("D", "R"))
+print(dfm_grouped)
+
+# calculate the log ratio of share, using alpha = 0.5 as a smoother
+alpha <- 0.5  
+counts <- as.matrix(dfm_grouped)
+shares <- sweep(counts + alpha, 1, rowSums(counts + alpha), "/")
+gD <- rownames(shares)[1]  
+gR <- rownames(shares)[2]  
+log_ratio <- log(shares[gD, ] / shares[gR, ])
+
+# present the results
+results <- tibble(
+  feature = colnames(dfm_grouped),
+  log_ratio = as.numeric(log_ratio),
+  share_D = as.numeric(shares[gD, ]),
+  share_R = as.numeric(shares[gR, ]),
+  freq_D  = as.numeric(counts[gD, ]),
+  freq_R  = as.numeric(counts[gR, ])
+)
+results %>%
+  arrange(log_ratio) %>%
+  select(feature, log_ratio) %>%
+  head(5)
+
+results %>%
+  arrange(desc(log_ratio)) %>%
+  select(feature, log_ratio) %>%
+  head(5)
+  
+```
+
+I chose the party of congress members as the subset dimension and used log(share $word_i$ in group a/share $word_i$ in b) with a smoother to calculate which words discriminate better each group. I selected the top 5 words which has the highest and lowest value, which means they are said by almost only by one of the two parties. I found that all  the words in the results have a "#" or "@", which makes sense because these marks indicates a heavy discussion. Comparing the top words for each party, I found that republicans talks more about the Federal affairs and Democrats focuses more on state level.
+
+## Question 5
+```{r}
+set.seed(1234)
+pacman::p_load("ggplot2")
+
+# load the dictionary
+pacman::p_load("quanteda.dictionaries", "quanteda.sentiment")
+data(data_dictionary_LSD2015)
+
+# get the textstat_polarity score
+lsd_results <- tweets_dfm %>% 
+  textstat_polarity(dictionary = data_dictionary_LSD2015)
+df_sent <- docvars(tweets_dfm) %>% 
+  mutate(doc_id=docnames(tweets_dfm)) %>% 
+  left_join(lsd_results)
+
+# label the data
+df_sent <- docvars(tweets_dfm) %>% 
+  mutate(doc_id = docnames(tweets_dfm)) %>% 
+  left_join(lsd_results, by = "doc_id") %>% 
+  mutate(
+    sentiment_class = case_when(
+      sentiment > 0 ~ "positive",
+      sentiment < 0 ~ "negative",
+      TRUE ~ "neutral"
+    )
+  )
+
+# visualization
+df_sent %>%
+  ggplot(aes(x = sentiment_class)) + 
+  geom_bar()
+
+df_sent %>%
+  group_by(Party) %>%
+  summarise(m=mean(sentiment, na.rm=TRUE)) %>%
+  ggplot(aes(x = Party, y = m)) +
+  geom_col()
+
+```
+
+I used the Lexicoder Sentiment Dictionary (from Young and Soroka) to get the textstats_polarity score and label the data. Through the visualizations, we can see that among all the texts, positive ones are the most, and then neutral, and then negative; among different parties, the Republicans' tweets are most positive, and then the Democrats, and then the Independent. In average, all these three categories of members' tweets are positive.
+
+## Question 6.1
+```{r}
+pacman::p_load("quanteda.textstats")
+set.seed(520)
+
+# get the samples for each group
+positive10 <- df_sent %>%
+  arrange(desc(sentiment)) %>%
+  slice_head(n = 10) %>%
+  left_join(data.frame(text = tweets$text, date = tweets$date, author = tweets$author), by = c("date", "author"))
+negative10 <- df_sent %>%
+  arrange(sentiment) %>%
+  slice_head(n = 10) %>%
+  left_join(data.frame(text = tweets$text, date = tweets$date, author = tweets$author), by = c("date", "author"))
+zero10 <- df_sent %>%
+  filter(sentiment == 0) %>%
+  sample_n(10) %>%
+  left_join(data.frame(text = tweets$text, date = tweets$date, author = tweets$author), by = c("date", "author"))
+sample30 <- bind_rows(positive10, negative10, zero10)
+
+# covert to dfm
+sample30_dfm <- sample30 %>%
+  corpus(text_field = "text") %>%
+  tokens(remove_punct = FALSE, 
+         remove_numbers = TRUE, 
+         verbose = FALSE) %>%
+  tokens_replace(pattern = "[[:punct:]&&[^#@]]+", 
+                 replacement = "", 
+                 valuetype = "regex") %>%
+  tokens_tolower() %>%
+  tokens_remove(stopwords("en")) %>%
+  tokens_wordstem() %>%
+  dfm() 
+
+# calculate the cosine similarity
+simil_sample <- textstat_simil(sample30_dfm,  
+               margin = "documents",
+               method = "cosine")
+df_simil <- as_tibble(as.matrix(simil_sample)) %>% 
+  mutate(names = rownames(as.matrix(simil_sample))) %>%
+  select(names, everything()) 
+df_simil[1:5, 1:5]
+
+# example: top 10 for text662196
+df_simil %>%
+  arrange(desc(text662196)) %>%
+  select(names,text662196) %>%
+  head(11) %>%
+  filter(names != "text662196")
+
+# calculate correlation
+corr_sample <- textstat_simil(sample30_dfm,  
+               margin = "documents",
+               method = "correlation")
+df_corr <- as_tibble(as.matrix(corr_sample)) %>% 
+  mutate(names = rownames(as.matrix(corr_sample))) %>%
+  select(names, everything()) 
+df_corr[1:5, 1:5]
+
+# example: top 10 for text662196
+df_corr %>%
+  arrange(desc(text662196)) %>%
+  select(names,text662196) %>%
+  head(11) %>%
+  filter(names != "text662196")
+```
+
+I took 10 observations from each class(negative, positive and neutral). Then I calculated the cosine similarity and correlation for these observations with each other. Because of the limited space, I only showed the top10 for the first observation. I found that the two distance measures I used had similar results. Though they are different in magnitude, the direction and order are almost the same, which can be a validation for each other. I also foundthese numbers are relatively small. That may be because the sample size are very small. 
+
+## Question 6.2
+```{r}
+set.seed(198)
+
+# get TF-IDF
+tfidf_sample <- sample30_dfm %>% 
+                dfm_tfidf(scheme_tf = "prop") %>% 
+                dfm_group(sentiment_class, force = TRUE) 
+
+# get the key words for each group
+top_pos <- topfeatures(tfidf_sample["positive", ], n = 10)
+top_neu <- topfeatures(tfidf_sample["neutral", ], n = 10)
+top_neg <- topfeatures(tfidf_sample["negative", ], n = 10)
+
+top_pos
+top_neu
+top_neg
+```
+
+The words with higher TF-IDF for each group is very intuitive: the positive contains some good nouns and adjectives, the negative contains some cold verbs and nouns, and the neutral contains mainly words without sentiment tendency. There are two things I found interesting which may help to augment the dictionary: First, there are two expressions/emojis in the results. It makes sense, because people do use emojis a lot on social platforms. These emojis have sentiment tendency, such has the purple click may reflect a sense of sarcasm so it's negative. To analyze people's sentiments on social platforms, these emojis should be added into the dictionary. Second, the word "biden" is a negative word. This also makes sense, because when a politician mentions someone's last name on twitter, he or she is more likely to criticize this person. So the people's names, especially important  politicians' names can also be added to the dictionary.
+
